@@ -82,4 +82,13 @@ Finally, we are deeply grateful to the [DeepSeek-AI](https://github.com/deepseek
 ## 📝 Citation
 If you find our work useful or inspiring, please kindly cite:
 ```bibtex
+@misc{hao2025texttosqldualstatereasoningintegrating,
+      title={Text-to-SQL as Dual-State Reasoning: Integrating Adaptive Context and Progressive Generation}, 
+      author={Zhifeng Hao and Qibin Song and Ruichu Cai and Boyan Xu},
+      year={2025},
+      eprint={2511.21402},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2511.21402}, 
+}
 ```

@@ -132,6 +132,101 @@ bigquery_prompt='''
     *   **Misleading Evidence:** In rare cases, the provided evidence might be incomplete. If a query on an expected column returns no results, consider that the data may not be populated as expected. Be prepared to explore other related columns to achieve the task's goal.
 '''
 
+mysql_prompt='''
+1. **Case Sensitivity and Quotation Marks:**
+   * MySQL is case-insensitive for identifiers on most platforms (Windows/Mac), but case-sensitive on Linux.
+   * Use **backticks (`` ` ``)** to enclose identifiers if they contain special characters, spaces, or are reserved keywords.
+   * Example: `` `table-name` ``, `` `order` `` (since 'order' is a reserved keyword).
+
+2. **Optimized and Idiomatic SQL:**
+   * Write highly optimized and idiomatic MySQL SQL. Use appropriate indexes and avoid full table scans when possible.
+   * Leverage MySQL's features like `EXPLAIN` to understand query execution plans.
+
+3. **String Functions:**
+   * Use `CONCAT()` for string concatenation: `CONCAT(col1, ' ', col2)`
+   * For case-insensitive matching, use `LOWER()` or `UPPER()`: `WHERE LOWER(column_name) LIKE '%keyword%'`
+   * Use `LIKE` for pattern matching, `REGEXP` for regular expressions.
+
+4. **Date and Time Functions:**
+   * Use `DATE_FORMAT()` for date formatting: `DATE_FORMAT(date_column, '%Y-%m-%d')`
+   * Use `YEAR()`, `MONTH()`, `DAY()` to extract date parts.
+   * Use `DATE_ADD()` or `DATE_SUB()` for date arithmetic: `DATE_ADD(date_column, INTERVAL 1 DAY)`
+
+5. **DISTINCT Keyword:**
+   * Use `DISTINCT` when you need to count unique entities.
+   * **Count total records** → `COUNT(*)`
+   * **Count distinct values** → `COUNT(DISTINCT column_name)`
+
+6. **JOIN Syntax:**
+   * Prefer explicit `INNER JOIN` or `LEFT JOIN` over implicit joins (comma-separated tables).
+   * Use `ON` clause for join conditions.
+
+7. **LIMIT and OFFSET:**
+   * Use `LIMIT n OFFSET m` for pagination: `LIMIT 10 OFFSET 20`
+   * Or use `LIMIT m, n` syntax: `LIMIT 20, 10` (offset, limit)
+
+8. **Subqueries:**
+   * MySQL supports subqueries in SELECT, FROM, WHERE, and HAVING clauses.
+   * Use `EXISTS` or `IN` for correlated subqueries when appropriate.
+
+9. **Window Functions (MySQL 8.0+):**
+   * If using MySQL 8.0+, you can use window functions like `ROW_NUMBER()`, `RANK()`, `DENSE_RANK()`, `LAG()`, `LEAD()`.
+
+10. **Handling NULLs:**
+    * Use `IS NULL` or `IS NOT NULL` to check for NULL values.
+    * Use `COALESCE()` or `IFNULL()` to handle NULL values: `COALESCE(column, 'default_value')`
+'''
+
+doris_prompt='''
+1. **Case Sensitivity and Quotation Marks:**
+   * Doris is case-sensitive for identifiers. Always use the exact case as specified in the schema.
+   * Use **backticks (`` ` ``)** to enclose identifiers if they contain special characters, spaces, or are reserved keywords.
+   * Example: `` `table-name` ``, `` `order` ``.
+
+2. **Optimized and Idiomatic SQL:**
+   * Write highly optimized and idiomatic Doris SQL. Doris is designed for OLAP workloads.
+   * Use appropriate aggregate functions and avoid unnecessary data movement.
+
+3. **String Functions:**
+   * Use `CONCAT()` for string concatenation: `CONCAT(col1, ' ', col2)`
+   * For case-insensitive matching, use `LOWER()` or `UPPER()`: `WHERE LOWER(column_name) LIKE '%keyword%'`
+   * Use `LIKE` for pattern matching.
+
+4. **Date and Time Functions:**
+   * Use `DATE_FORMAT()` for date formatting: `DATE_FORMAT(date_column, '%Y-%m-%d')`
+   * Use `YEAR()`, `MONTH()`, `DAY()` to extract date parts.
+   * Use `DATE_ADD()` or `DATE_SUB()` for date arithmetic: `DATE_ADD(date_column, INTERVAL 1 DAY)`
+
+5. **DISTINCT Keyword:**
+   * Use `DISTINCT` when you need to count unique entities.
+   * **Count total records** → `COUNT(*)`
+   * **Count distinct values** → `COUNT(DISTINCT column_name)`
+
+6. **JOIN Syntax:**
+   * Prefer explicit `INNER JOIN` or `LEFT JOIN` over implicit joins.
+   * Use `ON` clause for join conditions.
+
+7. **LIMIT and OFFSET:**
+   * Use `LIMIT n OFFSET m` for pagination: `LIMIT 10 OFFSET 20`
+   * Or use `LIMIT m, n` syntax: `LIMIT 20, 10` (offset, limit)
+
+8. **Aggregate Functions:**
+   * Doris supports standard SQL aggregate functions: `SUM()`, `AVG()`, `COUNT()`, `MAX()`, `MIN()`, etc.
+   * Use `GROUP BY` for grouping operations.
+
+9. **Window Functions:**
+   * Doris supports window functions like `ROW_NUMBER()`, `RANK()`, `DENSE_RANK()`, `LAG()`, `LEAD()`, etc.
+   * Syntax: `ROW_NUMBER() OVER (PARTITION BY col1 ORDER BY col2)`
+
+10. **Handling NULLs:**
+    * Use `IS NULL` or `IS NOT NULL` to check for NULL values.
+    * Use `COALESCE()` or `IFNULL()` to handle NULL values: `COALESCE(column, 'default_value')`
+
+11. **Doris-Specific Features:**
+    * Doris supports bitmap functions for distinct count: `BITMAP_UNION()`, `BITMAP_INTERSECT()`
+    * Use `HLL_UNION()` for approximate distinct count with HyperLogLog.
+'''
+
 Exploration_sqlite_prompt = '''
 **Based on the provided exploration information, you need to investigate ambiguous parts of the current SQLite database to avoid misunderstandings that could affect SQL generation. You will receive the user's question and a database schema.**
 - Analyze the entities in the user's question, determine if there are any vague entities that cannot temporarily be identified which columns they come from, and use multiple SQL (Like) statements to explore respectively for confirmation.
@@ -220,6 +315,72 @@ Exploration_bigquery_prompt='''
 - Explorations are limited to returning a random sample of 10 rows using `ORDER BY RAND() LIMIT 10`.
 - Output 5 to 10 SQL statements for exploration (from simple to complex scenarios).
 '''
+
+Exploration_mysql_prompt='''
+**Based on the provided exploration information, you need to thoroughly investigate ambiguous parts of the current MySQL database (while avoiding redundant exploration) to prevent any negative impacts on SQL generation due to insufficient understanding of the database. You will receive the user's question and a potentially applicable database schema. Your tasks are as follows:**
+
+**Requirements**
+
+### Step 1: Exploration of Similar Columns
+* There may be columns in the current database schema that are **semantically similar or similarly named**, which can easily cause confusion in SQL generation. Please identify these similar columns.
+* Write several SQL statements to analyze these columns:
+  * Use `COUNT` and `LIKE` to determine multiple fields that an entity may correspond to.
+  * Compare `COUNT(column_name)` and `COUNT(DISTINCT column_name)` to judge the **uniqueness and data quality** of the columns.
+
+### Step 2: Fuzzy Entity Matching
+* Perform case-insensitive matching on key entities in the user's question (such as product names, personal names, institution names, etc.).
+* Use `LOWER()` function for case-insensitive searches: `WHERE LOWER(column_name) LIKE '%keyword%'`. This allows you to dynamically search for entities and their potential aliases.
+
+### Step 3: Multi-Table Join Exploration
+* For scenarios involving multiple tables, proactively analyze whether there are **fields that can be used for joining** between tables (such as ID, name, timestamp, etc.).
+* Avoid **logical errors or join failures** due to lack of clear join conditions during SQL generation.
+
+### Step 4: Other Explorations
+* If there are any **ambiguous, confusing, or unspecified fields or table structures**, proactively explore and comprehensively investigate them using SQL.
+* Such explorations may include:
+  * Checking the number of table rows and primary key quality.
+  * Distributions of typical values (using `GROUP BY` and `COUNT`).
+  * Presence of `NULL` or invalid values.
+  * Time span of timestamp or date fields (using `MIN()` and `MAX()`).
+
+**Constraints**
+- **MySQL SQL (use backticks for identifiers with special characters or reserved keywords)**
+- Explorations are limited to returning a random sample of 10 rows using `ORDER BY RAND() LIMIT 10`.
+- Output 5 to 10 SQL statements for exploration (from simple to complex scenarios).
+'''
+
+Exploration_doris_prompt='''
+**Based on the provided exploration information, you need to thoroughly investigate ambiguous parts of the current Doris database (while avoiding redundant exploration) to prevent any negative impacts on SQL generation due to insufficient understanding of the database. You will receive the user's question and a potentially applicable database schema. Your tasks are as follows:**
+
+**Requirements**
+
+### Step 1: Exploration of Similar Columns
+* There may be columns in the current database schema that are **semantically similar or similarly named**, which can easily cause confusion in SQL generation. Please identify these similar columns.
+* Write several SQL statements to analyze these columns:
+  * Use `COUNT` and `LIKE` to determine multiple fields that an entity may correspond to.
+  * Compare `COUNT(column_name)` and `COUNT(DISTINCT column_name)` to judge the **uniqueness and data quality** of the columns.
+
+### Step 2: Fuzzy Entity Matching
+* Perform case-insensitive matching on key entities in the user's question (such as product names, personal names, institution names, etc.).
+* Use `LOWER()` function for case-insensitive searches: `WHERE LOWER(column_name) LIKE '%keyword%'`. This allows you to dynamically search for entities and their potential aliases.
+
+### Step 3: Multi-Table Join Exploration
+* For scenarios involving multiple tables, proactively analyze whether there are **fields that can be used for joining** between tables (such as ID, name, timestamp, etc.).
+* Avoid **logical errors or join failures** due to lack of clear join conditions during SQL generation.
+
+### Step 4: Other Explorations
+* If there are any **ambiguous, confusing, or unspecified fields or table structures**, proactively explore and comprehensively investigate them using SQL.
+* Such explorations may include:
+  * Checking the number of table rows and primary key quality.
+  * Distributions of typical values (using `GROUP BY` and `COUNT`).
+  * Presence of `NULL` or invalid values.
+  * Time span of timestamp or date fields (using `MIN()` and `MAX()`).
+
+**Constraints**
+- **Doris SQL (case-sensitive; use backticks for identifiers with special characters or reserved keywords)**
+- Explorations are limited to returning a random sample of 10 rows using `ORDER BY RAND() LIMIT 10`.
+- Output 5 to 10 SQL statements for exploration (from simple to complex scenarios).
+'''
        
 class Fine_grained_Exploration: 
     def __init__(self, Question, schema_json, db_type="sqlite") -> None:
@@ -238,6 +399,10 @@ class Fine_grained_Exploration:
             self.Task = Exploration_bigquery_prompt
         elif db_type == "sqlite":
             self.Task = Exploration_sqlite_prompt
+        elif db_type == "mysql":
+            self.Task = Exploration_mysql_prompt
+        elif db_type == "doris":
+            self.Task = Exploration_doris_prompt
         else: #Snowflake
             self.Task = Exploration_snow_prompt
 
@@ -265,7 +430,7 @@ class Fine_grained_Exploration:
      `WHERE str ILIKE '%target_str%'`
    * Replace spaces with `%` in patterns, e.g., `ILIKE '%meat%lovers%'`.
 """
-        elif self.db_type == "sqlite" or self.db_type == "bigquery":
+        elif self.db_type == "sqlite" or self.db_type == "bigquery" or self.db_type == "mysql" or self.db_type == "doris":
             return ""
         return "" 
 
@@ -296,7 +461,14 @@ class Information_Aggregation:
       self.temperature=0
       self.model=Reasoning_model
       self.messages=[]
-      self.db_type = "Snowflake" if db_type == "snow" else db_type
+      if db_type == "snow":
+          self.db_type = "Snowflake"
+      elif db_type == "mysql":
+          self.db_type = "MySQL"
+      elif db_type == "doris":
+          self.db_type = "Doris"
+      else:
+          self.db_type = db_type
       self.node ="""<Analysis Process>\nPlease elaborate in detail the consideration and analysis process for each step of the problem here.\n</Analysis Process>"""
       self.Prompt=f"""
 You are a professional data analyst responsible for inferring key information for SQL generation based on user questions and the corresponding database exploration.
@@ -384,6 +556,12 @@ class GenerateSQLBeginning:#
         elif db_type == "bigquery":
             self.db_type = "BigQuery"
             self.dialect = bigquery_prompt
+        elif db_type == "mysql":
+            self.db_type = "MySQL"
+            self.dialect = mysql_prompt
+        elif db_type == "doris":
+            self.db_type = "Doris"
+            self.dialect = doris_prompt
         else:
             self.db_type = db_type
             self.dialect = None
@@ -458,6 +636,10 @@ class ContinueSQLWriting:
           self.dialect = sqlite_prompt
       elif db_type == "bigquery":
           self.dialect = bigquery_prompt
+      elif db_type == "mysql":
+          self.dialect = mysql_prompt
+      elif db_type == "doris":
+          self.dialect = doris_prompt
       else:
           self.dialect = None
 
@@ -530,7 +712,7 @@ class Simple_Fix:
       self.Error_message=Error_message
       self.last_SQL=last_SQL
       self.node = """<Analysis Process>\nPlease elaborate in detail the consideration and analysis process for each step of the problem here.\n</Analysis Process>"""
-      self.Task="" if (db_type=="sqlite" or db_type=="bigquery") else """Use the following format for combining multiple tables: `WITH combined_tables AS (SELECT * FROM "db"."sc"."tab1" UNION ALL /* Note: Repeated for all tables from 20260101 to 20260630 */ UNION ALL SELECT * FROM "db"."sc"."tabN")`"""
+      self.Task="" if (db_type=="sqlite" or db_type=="bigquery" or db_type=="mysql" or db_type=="doris") else """Use the following format for combining multiple tables: `WITH combined_tables AS (SELECT * FROM "db"."sc"."tab1" UNION ALL /* Note: Repeated for all tables from 20260101 to 20260630 */ UNION ALL SELECT * FROM "db"."sc"."tabN")`"""
       self.Schema=Schema
       self.Prompt=f"""
 **SQL that reports an error:**

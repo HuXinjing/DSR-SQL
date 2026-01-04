@@ -18,6 +18,10 @@ from snowflake.connector.errors import DatabaseError, ProgrammingError
 from google.oauth2 import service_account
 from google.cloud import bigquery
 
+# MySQL and Doris
+import pymysql
+from pymysql import Error as PyMySQLError
+
 # Local imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from utils.mytoken.deepseek_tokenizer import *
@@ -26,8 +30,10 @@ from utils.Prompt import TOOL_LLM
 from utils.DBsetup.Get_DB import read_db_config
 
 # Import database information
-sqlite_DB_dir, snow_DB_dir, bigquery_DB_dir, snow_auth, Credentials_Path = read_db_config()
+sqlite_DB_dir, snow_DB_dir, bigquery_DB_dir, mysql_DB_dir, doris_DB_dir, snow_auth, Credentials_Path, mysql_auth, doris_auth = read_db_config()
 default_credentials = json.load(open(snow_auth, 'r')) if snow_auth and os.path.exists(snow_auth) else {}
+mysql_credentials = json.load(open(mysql_auth, 'r')) if mysql_auth and os.path.exists(mysql_auth) else {}
+doris_credentials = json.load(open(doris_auth, 'r')) if doris_auth and os.path.exists(doris_auth) else {}
 
 # Set maximum display rows to 20
 pd.set_option('display.max_rows', 20)
@@ -64,6 +70,10 @@ def detect_db_type(instance_id: str) -> str:
         return "snow"
     elif instance_id_lower.startswith('local'):
         return "sqlite"
+    elif instance_id_lower.startswith(('mysql', 'my')):
+        return "mysql"
+    elif instance_id_lower.startswith('doris'):
+        return "doris"
     else:
         assert False, f"Unknown or unsupported database type prefix for instance_id: '{instance_id}'"
 
@@ -332,16 +342,84 @@ def execute_bigquery_query(query, credentials_path, fetch_results=True, timeout=
     except FunctionTimedOut:
         return 3, f"Execution timed out after {timeout} seconds."
 
+def _execute_mysql_query_inner(query, credentials, db_name=None, fetch_results=True):
+    """
+    Internal execution function for MySQL/Doris: runs in a separate process.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = pymysql.connect(
+            host=credentials.get("host", "localhost"),
+            port=credentials.get("port", 3306),
+            user=credentials.get("user"),
+            password=credentials.get("password"),
+            database=db_name if db_name else credentials.get("database", ""),
+            charset='utf8mb4',
+            cursorclass=pymysql.cursors.DictCursor
+        )
+        cursor = conn.cursor()
+        start_time = time.time()
+        
+        cursor.execute(query)
+        
+        if fetch_results:
+            results = cursor.fetchall()
+            end_time = time.time()
+            execution_time = end_time - start_time
+            
+            if results:
+                # Convert dict cursor results to DataFrame
+                df = pd.DataFrame(results)
+                df_str = df.to_string(index=True, show_dimensions=True, max_rows=20)
+                df_str_no_empty_lines = re.sub(r'\n\s*\n', '\n', df_str)
+                return 0, truncate_text_by_tokens(df_str_no_empty_lines) + f"\nQuery Time: {execution_time:.2f} s"
+            else:
+                return 0, '[]'
+        else:
+            conn.commit()
+            end_time = time.time()
+            execution_time = end_time - start_time
+            return 0, f"Operation successful.\nExecution Time: {execution_time:.2f} s"
+    
+    except PyMySQLError as pe:
+        return 1, f"MySQL/Doris Programming Error: {pe}"
+    except Exception as e:
+        return 3, f"Unknown Error: {e}"
+    finally:
+        try:
+            if cursor: cursor.close()
+            if conn: conn.close()
+        except:
+            pass
+
+def execute_mysql_query(query, credentials, db_name=None, fetch_results=True, timeout=200):
+    """
+    Execute MySQL query with timeout protection.
+    """
+    try:
+        return func_timeout(timeout, _execute_mysql_query_inner,
+                            args=(query, credentials, db_name, fetch_results))
+    except FunctionTimedOut:
+        return 3, f"Execution timed out after {timeout} seconds."
+
+def execute_doris_query(query, credentials, db_name=None, fetch_results=True, timeout=200):
+    """
+    Execute Doris query. Doris uses MySQL protocol, so we can reuse MySQL execution function.
+    """
+    return execute_mysql_query(query, credentials, db_name, fetch_results, timeout)
+
 def db_interface(db_type, query, conn_info, fetch_results=True):
     """
     Unified database interface that selects the appropriate execution function based on the database type.
     Args:
-        db_type (str): The database type, supports 'sqlite', 'snowflake', or 'bigquery'.
+        db_type (str): The database type, supports 'sqlite', 'snowflake', 'bigquery', 'mysql', or 'doris'.
         query (str): The SQL query to be executed.
         conn_info (str or dict): 
             - For sqlite, this can be the database filename or the full path.
             - For snowflake, this should be the database ID.
             - For BigQuery, this is not used as the JSON credential path is handled globally.
+            - For MySQL/Doris, this should be the database name (optional, can be in credentials).
         fetch_results (bool): Whether to fetch query results (default is True).
     Returns:
         tuple: (status_code, query_result_or_error_message)
@@ -359,6 +437,12 @@ def db_interface(db_type, query, conn_info, fetch_results=True):
     
     if db_type == "bigquery":
         return execute_bigquery_query(query, credentials_path=Credentials_Path)
+    
+    if db_type == "mysql":
+        return execute_mysql_query(query, credentials=mysql_credentials, db_name=conn_info, fetch_results=fetch_results)
+    
+    if db_type == "doris":
+        return execute_doris_query(query, credentials=doris_credentials, db_name=conn_info, fetch_results=fetch_results)
     
     return 3, "Support for other database types is not yet implemented."
 
@@ -430,6 +514,125 @@ def M_Schema_sqlite(SL, db_id, level='table'):
     if SL is None:
         SL = list(all_tables_info.keys())
         level = 'table'
+
+    tables_to_process = []
+
+    if level == 'table':
+        if not isinstance(SL, list):
+            raise TypeError("When level='table', SL must be a list.")
+
+        lower_sl_tables = [t.lower() for t in SL]
+        tables_to_process = [table_name_map[t] for t in lower_sl_tables if t in table_name_map]
+
+        missing_tables = set(lower_sl_tables) - set(table_name_map.keys())
+        if missing_tables:
+            print(f"Warning: Tables {missing_tables} do not exist in database '{db_id}'.")
+
+    elif level == 'column':
+        if not isinstance(SL, dict):
+            raise TypeError("When level='column', SL must be a dictionary (dict).")
+
+        lower_sl_tables = [t.lower() for t in SL.keys()]
+        tables_to_process = [table_name_map[t] for t in lower_sl_tables if t in table_name_map]
+
+        missing_tables = set(lower_sl_tables) - set(table_name_map.keys())
+        if missing_tables:
+            print(f"Warning: Tables {missing_tables} do not exist in database '{db_id}'.")
+    else:
+        raise ValueError(f"Invalid level parameter: '{level}'. Only 'table' or 'column' is supported.")
+
+    lines = [f"Note that the 'Examples' are actual values from the column. Some column might contain the values that are directly related to the question. Use it to help you justify which columns or values to use.\n[DB_ID] {db_id}"]
+
+    for original_table_name in tables_to_process:
+        columns_data = all_tables_info.get(original_table_name, [])
+        lines.append(f"# Table: {original_table_name}")
+        lines.append("[")
+
+        cols_to_render = []
+        if level == 'table':
+            cols_to_render = columns_data
+        elif level == 'column':
+            requested_cols = []
+            for sl_key, sl_val in SL.items():
+                if sl_key.lower() == original_table_name.lower():
+                    requested_cols = [c.lower() for c in sl_val]
+                    break
+
+            table_col_map = {col[0].lower(): col for col in columns_data}
+            for req_col_lower in requested_cols:
+                if req_col_lower in table_col_map:
+                    cols_to_render.append(table_col_map[req_col_lower])
+                else:
+                    print(f"Warning: Column '{req_col_lower}' does not exist in table '{original_table_name}', skipping.")
+
+        col_lines = []
+        for col_list in cols_to_render:
+            col_name, pk_info, col_type, col_desc, col_examples = col_list
+            col_parts = [f"{col_name}: {col_type}"]
+            if pk_info == "Primary Key":
+                col_parts.append("Primary Key")
+            if col_desc:
+                col_parts.append(col_desc)
+            if col_examples:
+                col_parts.append(f"Examples: [{col_examples}]")
+
+            col_str = f"({', '.join(col_parts)})"
+            col_lines.append(col_str)
+
+        for i, line in enumerate(col_lines):
+            lines.append(line + ("," if i < len(col_lines) - 1 else ""))
+        lines.append("]")
+
+    if len(tables_to_process) > 1:
+        relevant_fks = []
+        tables_to_process_lower = {t.lower() for t in tables_to_process}
+        for source_col, target_col in all_foreign_keys.items():
+            source_table = source_col.split('.')[0].lower()
+            target_table = target_col.split('.')[0].lower()
+            if source_table in tables_to_process_lower and target_table in tables_to_process_lower:
+                relevant_fks.append(f"{source_col} = {target_col}")
+
+        if relevant_fks:
+            lines.append("[Foreign keys]")
+            lines.extend(relevant_fks)
+
+    return "\n".join(lines)
+
+def M_Schema_mysql(db_id, SL=None, db_type="mysql", Level="table") -> str:
+    """
+    Generates a formatted database schema string for MySQL/Doris based on the given database ID (db_id),
+    table/column selection list (SL), and level.
+    Similar to M_Schema_sqlite but uses mysql_DB_dir or doris_DB_dir.
+    """
+    if db_id is None:
+        raise ValueError("The db_id parameter must be provided.")
+
+    # Select appropriate directory based on db_type
+    if db_type == "mysql":
+        db_dir = os.path.join(mysql_DB_dir, db_id) if mysql_DB_dir else os.path.join("spider2-lite/resource/databases/mysql", db_id)
+    else:  # doris
+        db_dir = os.path.join(doris_DB_dir, db_id) if doris_DB_dir else os.path.join("spider2-lite/resource/databases/doris", db_id)
+    
+    json_path = os.path.join(db_dir, f"{db_id}_M-Schema.json")
+
+    if not os.path.exists(json_path):
+        raise FileNotFoundError(f"Schema file not found: {json_path}")
+
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            schema_data = json.load(f)
+    except Exception as e:
+        raise RuntimeError(f"Failed to load schema file: {str(e)}")
+
+    all_tables_info = schema_data.get(db_id, {})
+    all_foreign_keys = schema_data.get("foreign_keys", {})
+    table_name_map = {name.lower(): name for name in all_tables_info.keys()}
+
+    if SL is None:
+        SL = list(all_tables_info.keys())
+        level = 'table'
+    else:
+        level = Level
 
     tables_to_process = []
 
@@ -688,6 +891,10 @@ def M_Schema(db_id, SL=None, db_type="snow", Level="table") -> str:
 
     if db_type=="sqlite":
         return M_Schema_sqlite(db_id=db_id, SL=SL)
+    if db_type=="mysql":
+        return M_Schema_mysql(db_id=db_id, SL=SL, db_type=db_type)
+    if db_type=="doris":
+        return M_Schema_mysql(db_id=db_id, SL=SL, db_type=db_type)
     if db_type=="bigquery":
         return M_Schema_bigquery(db_id=db_id, SL=SL)
 
@@ -865,9 +1072,13 @@ def M_Schema(db_id, SL=None, db_type="snow", Level="table") -> str:
     return "\n".join(lines)
 
 def generate_ddl_from_json(db_id, table_list=None, db_type="snow"):
-    # Delegate to specific functions for sqlite or bigquery
+    # Delegate to specific functions for sqlite, bigquery, mysql, or doris
     if db_type == "sqlite":
         return get_tables_ddl_sqlite(db_id, table_list)
+    if db_type == "mysql":
+        return get_tables_ddl_mysql(db_id, table_list, db_type)
+    if db_type == "doris":
+        return get_tables_ddl_mysql(db_id, table_list, db_type)
     if db_type == "bigquery":
         return generate_ddl_from_json_bigquery(db_id, table_list)
     
@@ -998,6 +1209,82 @@ def get_tables_ddl_sqlite(db_id: str, table_list: Optional[List[str]] = None) ->
              print(f"Could not find the specified tables in database '{db_path}': {table_list}.")
         else:
              print(f"No user-created tables found in database '{db_path}'.")
+        return ""
+    
+    return ';\n\n'.join(ddl_statements) + ';'
+
+def get_tables_ddl_mysql(db_id: str, table_list: Optional[List[str]] = None, db_type: str = "mysql") -> str:
+    """
+    Generate DDL statements for MySQL/Doris tables from JSON schema file.
+    Similar to get_tables_ddl_sqlite but uses mysql_DB_dir or doris_DB_dir.
+    """
+    # Select appropriate directory based on db_type
+    if db_type == "mysql":
+        db_dir = os.path.join(mysql_DB_dir, db_id) if mysql_DB_dir else os.path.join("spider2-lite/resource/databases/mysql", db_id)
+    else:  # doris
+        db_dir = os.path.join(doris_DB_dir, db_id) if doris_DB_dir else os.path.join("spider2-lite/resource/databases/doris", db_id)
+    
+    json_path = os.path.join(db_dir, f"{db_id}_M-Schema.json")
+    
+    if not os.path.exists(json_path):
+        print(f"Error: Schema file not found at '{json_path}'")
+        return ""
+
+    ddl_statements = []
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            schema_data = json.load(f)
+        
+        all_tables_info = schema_data.get(db_id, {})
+        
+        # Type mapping for MySQL/Doris
+        type_mapping = {
+            "TEXT": "TEXT",
+            "NUMBER": "INT",
+            "FLOAT": "DOUBLE",
+            "DATE": "DATE",
+            "TIME": "TIME"
+        }
+        
+        tables_to_process = table_list if table_list else list(all_tables_info.keys())
+        
+        for table_name in tables_to_process:
+            if table_name not in all_tables_info:
+                continue
+                
+            columns_data = all_tables_info[table_name]
+            create_statement = f"CREATE TABLE `{table_name}` (\n"
+            
+            column_definitions = []
+            for col_info in columns_data:
+                if not isinstance(col_info, list) or len(col_info) < 3:
+                    continue
+                
+                col_name = col_info[0]
+                pk_info = col_info[1] if len(col_info) > 1 else None
+                col_type = col_info[2] if len(col_info) > 2 else "TEXT"
+                
+                sql_type = type_mapping.get(col_type.upper(), col_type.upper())
+                col_def = f"    `{col_name}` {sql_type}"
+                
+                if pk_info == "Primary Key":
+                    col_def += " PRIMARY KEY"
+                
+                column_definitions.append(col_def)
+            
+            create_statement += ',\n'.join(column_definitions)
+            create_statement += '\n);\n'
+            ddl_statements.append(create_statement)
+            
+    except Exception as e:
+        print(f"Error reading or parsing schema file '{json_path}': {e}")
+        return ""
+    
+    if not ddl_statements:
+        if table_list:
+            print(f"Could not find the specified tables in schema file '{json_path}': {table_list}.")
+        else:
+            print(f"No tables found in schema file '{json_path}'.")
         return ""
     
     return ';\n\n'.join(ddl_statements) + ';'

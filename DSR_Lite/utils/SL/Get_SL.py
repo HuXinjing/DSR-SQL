@@ -36,7 +36,7 @@ from typing import List, Optional
 sys.path.append(
     os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 )
-from utils.Database_Interface import snow_DB_dir,M_Schema,generate_ddl_from_json,detect_db_type,sqlite_DB_dir,bigquery_DB_dir
+from utils.Database_Interface import snow_DB_dir,M_Schema,generate_ddl_from_json,detect_db_type,sqlite_DB_dir,bigquery_DB_dir,mysql_DB_dir,doris_DB_dir
 from utils.app_logs.logger_config import setup_logger, log_context,JsonLogger
 from utils.mytoken.deepseek_tokenizer import *
 
@@ -233,6 +233,64 @@ def get_table_mess_bigquery(db_name):
 
     return all_tables
 
+def get_table_mysql(db_name, db_type="mysql"):
+    """
+    Extracts all non-empty table names from the MySQL/Doris database's JSON file.
+    Similar to get_table_sqlite but uses mysql_DB_dir or doris_DB_dir.
+
+    Args:
+        db_name (str): The name of the database, used to construct the file path.
+        db_type (str): Either "mysql" or "doris"
+
+    Returns:
+        list: A list containing all formatted table names.
+              Returns an empty list if the file does not exist or parsing fails.
+    """
+    # Select appropriate directory based on db_type
+    if db_type == "mysql":
+        db_dir = mysql_DB_dir if mysql_DB_dir else "spider2-lite/resource/databases/mysql"
+    else:  # doris
+        db_dir = doris_DB_dir if doris_DB_dir else "spider2-lite/resource/databases/doris"
+    
+    db_json_path = f"{db_dir}/{db_name}/{db_name}_M-Schema.json"
+    all_tables = []
+
+    try:
+        with open(db_json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        print(f"❌ Error: File not found at '{db_json_path}'")
+        return []
+    except json.JSONDecodeError:
+        print(f"❌ Error: Unable to parse JSON file '{db_json_path}'")
+        return []
+
+    # Some JSON structures are {"db_name": {...}, "foreign_keys": {...}, "table_Information": {...}}
+    # So first find the database layer
+    db_content = None
+    if db_name in data:
+        db_content = data[db_name]
+    else:
+        # Some file structures are different, automatically find the first key that is not metadata
+        for k, v in data.items():
+            if k not in ["foreign_keys", "table_Information", "table_description_summary"] and isinstance(v, dict):
+                db_content = v
+                break
+
+    if not db_content:
+        print(f"⚠️ Warning: Database structure not found in file '{db_name}'")
+        return []
+
+    # Iterate through tables under this database
+    for table_name, table_content in db_content.items():
+        # Skip empty tables and metadata keys
+        if table_name in ["foreign_keys", "table_Information", "table_description_summary"] or not table_content:
+            continue
+
+        full_table_name = f"{table_name}"
+        all_tables.append(full_table_name)
+
+    return all_tables
 
 def get_table_sqlite(db_name):
     """
@@ -278,6 +336,66 @@ def get_table_sqlite(db_name):
     for table_name, table_content in db_content.items():
         # Skip empty tables and foreign_keys
         if table_name == "foreign_keys" or not table_content:
+            continue
+
+        full_table_name = f"{table_name}"
+        all_tables.append(full_table_name)
+
+    return all_tables
+
+def get_table_mysql(db_name, db_type="mysql"):
+    """
+    Extracts all non-empty table names from the MySQL/Doris database's JSON file.
+    Similar to get_table_sqlite but uses mysql_DB_dir or doris_DB_dir.
+
+    Args:
+        db_name (str): The name of the database, used to construct the file path.
+        db_type (str): Either "mysql" or "doris".
+
+    Returns:
+        list: A list containing all formatted (table_name) non-empty table names.
+              Returns an empty list if the file does not exist or parsing fails.
+    """
+    # Select appropriate directory based on db_type
+    if db_type == "mysql":
+        db_dir_base = mysql_DB_dir
+    elif db_type == "doris":
+        db_dir_base = doris_DB_dir
+    else:
+        raise ValueError(f"Invalid db_type for get_table_mysql: {db_type}")
+    
+    db_json_path = f"{db_dir_base}/{db_name}/{db_name}_M-Schema.json"
+    all_tables = []
+
+    try:
+        with open(db_json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        print(f"❌ Error: File not found at '{db_json_path}'")
+        return []
+    except json.JSONDecodeError:
+        print(f"❌ Error: Unable to parse JSON file '{db_json_path}'")
+        return []
+
+    # MySQL/Doris format: {db_name: {...}, "table_Information": {...}, "table_description_summary": {...}, "foreign_keys": {...}}
+    db_content = None
+    if db_name in data:
+        db_content = data[db_name]
+    else:
+        # Some file structures are different, automatically find the first key that is not metadata
+        for k, v in data.items():
+            if k not in ["foreign_keys", "table_Information", "table_description_summary"] and isinstance(v, dict):
+                db_content = v
+                break
+
+    if not db_content:
+        print(f"⚠️ Warning: Database structure not found in file '{db_name}'")
+        return []
+
+    # Iterate through tables under this database
+    for table_name, table_content in db_content.items():
+        # Skip empty tables and metadata
+        if table_name in ["foreign_keys", "table_Information", "table_description_summary"] or not table_content:
             continue
 
         full_table_name = f"{table_name}"
@@ -499,6 +617,9 @@ def SL_workflow_old(Question_id, Question, db_id,Tool_model, model="deepseek-cha
                     table_x = Get_SL_func_snow(SQL=SQL, db_name=db_id, model=Tool_model,allow_partial=False, check_columns=False)
                 elif db_type == "sqlite":
                     table_x = Get_SL_func_sqlite(SQL=SQL, db_name=db_id,model=Tool_model, allow_partial=False, check_columns=True)
+                elif db_type == "mysql" or db_type == "doris":
+                    from Extract_tables_col import Get_SL_func_mysql
+                    table_x = Get_SL_func_mysql(SQL=SQL, db_name=db_id, model=Tool_model, check_columns=True, db_type=db_type)
 
                 end_time = time.time()
                 elapsed_time2 = end_time - start_time
@@ -625,7 +746,7 @@ def SL_workflow_min(Question_id, Question, db_id, table_list,Tool_model,
                 # Execute SQL to get structure information
                 if db_type == "snow" or db_type=="bigquery":
                     table_x = Get_SL_func_snow(SQL=SQL, db_name=db_id,model=Tool_model, check_columns=check_columns)
-                elif db_type == "sqlite":
+                elif db_type == "sqlite" or db_type == "mysql" or db_type == "doris":
                     table_x = Get_SL_func_sqlite(SQL=SQL, db_name=db_id, model=Tool_model,check_columns=True)
 
 
@@ -696,6 +817,8 @@ def SL_workflow(Question_id, Question, db_id, Tool_model,
         table_list = get_table_mess_snow(db_id)
     elif db_type=="sqlite":
         table_list = get_table_sqlite(db_id)
+    elif db_type=="mysql" or db_type=="doris":
+        table_list = get_table_mysql(db_id, db_type)
     else:
         table_list=get_table_mess_bigquery(db_id)
     # If it is a single-table database and use_single_table is disabled, skip subsequent processes
@@ -710,7 +833,10 @@ def SL_workflow(Question_id, Question, db_id, Tool_model,
     if db_type=="snow" or db_type=="bigquery":
         table_mess_ddl = generate_ddl_from_json(db_id,db_type=db_type)
     elif db_type=="sqlite":
-        table_mess_ddl = get_tables_ddl_sqlite(db_id,db_type=db_type)
+        from utils.Database_Interface import get_tables_ddl_sqlite
+        table_mess_ddl = get_tables_ddl_sqlite(db_id)
+    elif db_type=="mysql" or db_type=="doris":
+        table_mess_ddl = generate_ddl_from_json(db_id,db_type=db_type)
 
     # Calculate token count for JSON schema
     len_table_mess = get_token_count(table_mess)
@@ -788,6 +914,9 @@ def SL_workflow(Question_id, Question, db_id, Tool_model,
                     table_x = Get_SL_func_snow(SQL=SQL, db_name=db_id,model=Tool_model, check_columns=check_columns)
                 elif db_type == "sqlite":
                     table_x = Get_SL_func_sqlite(SQL=SQL, db_name=db_id, model=Tool_model,check_columns=True)
+                elif db_type == "mysql" or db_type == "doris":
+                    from Extract_tables_col import Get_SL_func_mysql
+                    table_x = Get_SL_func_mysql(SQL=SQL, db_name=db_id, model=Tool_model, check_columns=True, db_type=db_type)
 
                 end_time = time.time()
                 elapsed_time2 = end_time - start_time

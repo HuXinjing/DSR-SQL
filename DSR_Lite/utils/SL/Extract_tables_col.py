@@ -161,6 +161,138 @@ def Get_SL_func_snow(SQL, db_name, model="deepseek-chat",
 
     return final_table_col
 
+def Get_SL_func_mysql(SQL, db_name, model="deepseek-chat",
+                allow_partial=False, check_columns: bool = True, db_type="mysql"):
+    """
+    Call LLM to extract tables and columns used in SQL and validate them against the MySQL/Doris database Schema.
+    Similar to Get_SL_func_sqlite but uses mysql_DB_dir or doris_DB_dir.
+
+    Args:
+        SQL (str): The input SQL query.
+        db_name (str): Database name, used to locate the schema JSON file and the top-level key within it.
+        model (str): The LLM model to use.
+        allow_partial (bool): (Not used in this implementation, but kept for signature compatibility).
+        check_columns (bool): Whether to validate column names.
+        db_type (str): Either "mysql" or "doris"
+
+    Returns:
+        dict: Validated dictionary of tables and columns. Returns an empty dict if failure.
+    """
+    # Import directory paths
+    from utils.Database_Interface import mysql_DB_dir, doris_DB_dir
+    
+    # Select appropriate directory based on db_type
+    if db_type == "mysql":
+        db_dir = mysql_DB_dir if mysql_DB_dir else "spider2-lite/resource/databases/mysql"
+    else:  # doris
+        db_dir = doris_DB_dir if doris_DB_dir else "spider2-lite/resource/databases/doris"
+    
+    # 1. Import and preprocess Database Schema
+    db_json_path = f"{db_dir}/{db_name}/{db_name}_M-Schema.json" 
+    try:
+        with open(db_json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        print(f"Error: File not found at '{db_json_path}'")
+        return {}
+    except json.JSONDecodeError:
+        print(f"Error: Unable to parse JSON file '{db_json_path}'")
+        return {}
+    
+    schema_tables = data.get(db_name, {})
+    
+    if not schema_tables:
+        print(f"Error: Key '{db_name}' not found in JSON file or value is empty.")
+        return {}
+
+    # Create lowercase-to-original mapping for case-insensitive lookup
+    schema_tables_lower_map = {t.lower(): t for t in schema_tables.keys()}
+    
+    schema_cols_lower_map = {}
+    if check_columns:
+        for table_name, cols_data in schema_tables.items():
+            # Store column mappings for each table
+            schema_cols_lower_map[table_name] = {col_info[0].lower(): col_info[0] for col_info in cols_data}
+
+    def run_llm():
+        print(get_prompt(SQL=SQL, db_type=db_type))
+        SQL_mess = [{"role": "user", "content": get_prompt(SQL=SQL, db_type=db_type)}]
+        _, _, _, LLM_return_str = LLM_output(
+            messages=SQL_mess,
+            model=model,
+            temperature=0,
+            max_token=2048
+        )
+        print("LLM_return_str: ", LLM_return_str)
+        return LLM_return_str
+
+    # 2. Retry Loop
+    MAX_RETRIES = 10
+    for attempt in range(MAX_RETRIES):
+        print(f"\n--- Attempt {attempt + 1}/{MAX_RETRIES} ---")
+        try:
+            # 3. Call LLM and parse
+            LLM_return = run_llm()
+            table_col_from_llm = extract_and_parse_json(LLM_return)
+            
+            if not table_col_from_llm or not isinstance(table_col_from_llm, dict):
+                print("LLM return is empty or format is incorrect, retrying...")
+                time.sleep(1)
+                continue
+
+            # 4. Validate tables and columns
+            validated_result = {}
+            for llm_table, llm_cols in table_col_from_llm.items():
+                llm_table_lower = llm_table.lower()
+
+                # 4.1 Validate table name
+                if llm_table_lower not in schema_tables_lower_map:
+                    print(f"Warning: Table '{llm_table}' returned by LLM not found in DB '{db_name}', discarding.")
+                    continue
+                
+                original_table_name = schema_tables_lower_map[llm_table_lower]
+                
+                # 4.2 If column check is not required, add table name directly
+                if not check_columns:
+                    validated_result[original_table_name] = []
+                    continue
+
+                # 4.3 Validate column names (if check_columns is True)
+                validated_cols = []
+                if not isinstance(llm_cols, list):
+                    print(f"Warning: Columns for table '{llm_table}' is not a list, ignoring.")
+                    llm_cols = []
+
+                # Retrieve the column map for the matched original table name
+                current_table_cols_map = schema_cols_lower_map[original_table_name]
+                
+                for llm_col in llm_cols:
+                    llm_col_lower = llm_col.lower()
+                    if llm_col_lower in current_table_cols_map:
+                        original_col_name = current_table_cols_map[llm_col_lower]
+                        validated_cols.append(original_col_name)
+                    else:
+                        print(f"Warning: Column '{llm_col}' for table '{llm_table}' not found in DB '{db_name}', discarding.")
+
+                if validated_cols:
+                    validated_result[original_table_name] = validated_cols
+
+            if validated_result:
+                print(f"✅ Validation successful: {validated_result}")
+                return validated_result
+            else:
+                print("No valid tables/columns found, retrying...")
+                time.sleep(1)
+
+        except Exception as e:
+            print(f"Error in attempt {attempt + 1}: {e}")
+            import traceback
+            traceback.print_exc()
+            time.sleep(1)
+
+    print("❌ Failed to extract and validate tables/columns after maximum retries.")
+    return {}
+
 def Get_SL_func_sqlite(SQL, db_name, model="deepseek-chat",
                 allow_partial=False, check_columns: bool = True, db_type="sqlite"):
     """

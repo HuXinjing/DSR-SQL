@@ -19,5 +19,19 @@
         "describe1":"Please set the corresponding database metadata path",
         "Authentication":"spider2-lite/evaluation_suite/bigquery_credential.json",
         "describe2":"Configure your BigQuery according to the official Spider2 requirements, and place the corresponding bigquery_credential.json address here. (Not required if you only choose to run SQLite)"
+    },
+    {
+        "DB_type":"MySQL",
+        "Local_path":"mysql_credential.json",
+        "describe1":"Optional: Path to store schema JSON files. Leave empty if not using local schema files.",
+        "Authentication":"mysql_credential.json",
+        "describe2":"Required: MySQL connection credentials. Create mysql_credential.json with: {\"host\": \"your_mysql_ip\", \"port\": 3306, \"user\": \"username\", \"password\": \"password\", \"database\": \"database_name\"}"
+    },
+    {
+        "DB_type":"Doris",
+        "Local_path":"mysql_credential.json",
+        "describe1":"Optional: Path to store schema JSON files. Leave empty if not using local schema files.",
+        "Authentication":"doris_credential.json",
+        "describe2":"Required: Doris connection credentials. Create doris_credential.json with: {\"host\": \"your_doris_ip\", \"port\": 9030, \"user\": \"username\", \"password\": \"password\", \"database\": \"database_name\"}"
     }
 ]

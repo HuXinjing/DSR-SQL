@@ -24,4 +24,14 @@ python -m utils.preprocessor.Get_table_mes_snow \
   --model "$MODEL_NAME" \
   --workers "$WORKERS"
 
+echo "Starting MySQL processing..."
+# 4. MySQL, no LLM required
+python -m utils.preprocessor.Get_table_mes_mysql \
+  --db_type mysql
+
+echo "Starting Doris processing..."
+# 5. Doris, no LLM required
+python -m utils.preprocessor.Get_table_mes_mysql \
+  --db_type doris
+
 echo "All tasks completed."

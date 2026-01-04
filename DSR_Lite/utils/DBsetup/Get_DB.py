@@ -15,8 +15,12 @@ def read_db_config():
     sqlite_path = ""
     snow_path = ""
     bigquery_path = ""
+    mysql_path = ""
+    doris_path = ""
     snow_auth = ""
     bigquery_auth = ""
+    mysql_auth = ""
+    doris_auth = ""
     
     # Iterate through configuration items
     for item in data:
@@ -32,6 +36,12 @@ def read_db_config():
         elif db_type == "bigquery":
             bigquery_path = local_path
             bigquery_auth = auth
+        elif db_type == "mysql":
+            mysql_path = local_path
+            mysql_auth = auth
+        elif db_type == "doris":
+            doris_path = local_path
+            doris_auth = auth
 
     if sqlite_path and os.path.exists(os.path.dirname(os.path.normpath(sqlite_path))):
         # 1. Locate spider2-localdb path (in the same directory as sqlite_path)
@@ -67,14 +77,18 @@ def read_db_config():
                         else:
                             print(f"[Warning] SQLite file missing in both destination and spider2-localdb: {db_name}.sqlite")
     
-    return sqlite_path, snow_path, bigquery_path, snow_auth, bigquery_auth
+    return sqlite_path, snow_path, bigquery_path, mysql_path, doris_path, snow_auth, bigquery_auth, mysql_auth, doris_auth
 
 # Usage example
 if __name__ == "__main__":
-    sqlite, snow, bigquery, snow_auth, bigquery_auth = read_db_config()
+    sqlite, snow, bigquery, mysql, doris, snow_auth, bigquery_auth, mysql_auth, doris_auth = read_db_config()
     
     print(f"SQLite path: {sqlite}")
     print(f"Snowflake path: {snow}")
     print(f"BigQuery path: {bigquery}")
+    print(f"MySQL path: {mysql}")
+    print(f"Doris path: {doris}")
     print(f"Snowflake authentication: {snow_auth}")
     print(f"BigQuery authentication: {bigquery_auth}")
+    print(f"MySQL authentication: {mysql_auth}")
+    print(f"Doris authentication: {doris_auth}")
